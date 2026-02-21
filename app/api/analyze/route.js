@@ -6,7 +6,7 @@ import {
   generateConceptPrompt,
   generateQuizPrompt,
 } from "../../../lib/prompts";
-import { trimText, safeJSONParse } from "../../../lib/utils";
+import { trimText, safeJSONParse } from "../../../lib/utils.js";
 
 function formatSummaryLines(text) {
   if (typeof text !== "string") {
