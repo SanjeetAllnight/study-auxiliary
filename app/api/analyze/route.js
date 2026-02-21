@@ -1,27 +1,15 @@
 import { NextResponse } from "next/server";
 
 import { generateContent } from "../../../lib/gemini";
-import {
-  generateSummaryPrompt,
-  generateConceptPrompt,
-  generateQuizPrompt,
-} from "../../../lib/prompts";
+import { generateAnalyzePrompt } from "../../../lib/prompts";
 import { trimText, safeJSONParse } from "../../../lib/utils";
-
-function formatSummaryLines(text) {
-  if (typeof text !== "string") {
-    return [];
-  }
-
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^[-*]\s*/, ""));
-}
 
 export async function POST(request) {
   try {
+    const url = new URL(request.url);
+    const modeParam = url.searchParams.get("mode");
+    const mode = modeParam === "quick" ? "quick" : "normal";
+
     let body;
 
     try {
@@ -32,40 +20,23 @@ export async function POST(request) {
 
     const trimmedText = trimText(body?.text);
     console.log("Incoming text:", trimmedText);
+    console.log("Analyze mode:", mode);
 
     if (!trimmedText) {
       return NextResponse.json({ error: "text is required." }, { status: 400 });
     }
 
-    const summaryPrompt = generateSummaryPrompt(trimmedText);
-    const conceptPrompt = generateConceptPrompt(trimmedText);
-    const quizPrompt = generateQuizPrompt(trimmedText);
+    const analyzePrompt = generateAnalyzePrompt(trimmedText, mode);
+    const analyzeRaw = await generateContent(analyzePrompt);
+    console.log("Gemini analyze response:", analyzeRaw);
 
-    const summaryRaw = await generateContent(summaryPrompt);
-    console.log("Gemini summary response:", summaryRaw);
-
-    const conceptsRaw = await generateContent(conceptPrompt);
-    console.log("Gemini concepts response:", conceptsRaw);
-
-    const quizRaw = await generateContent(quizPrompt);
-    console.log("Gemini quiz response:", quizRaw);
-
-    const summary = formatSummaryLines(summaryRaw);
-
-    const conceptsParsed = safeJSONParse(conceptsRaw, []);
-    const concepts = Array.isArray(conceptsParsed) ? conceptsParsed : [];
-
-    const quizParsed = safeJSONParse(quizRaw, {});
-    const quiz =
-      quizParsed && typeof quizParsed === "object" && !Array.isArray(quizParsed)
-        ? quizParsed
-        : {};
-
-    return NextResponse.json({
-      summary,
-      concepts,
-      quiz,
+    const parsed = safeJSONParse(analyzeRaw, {
+      summary: [],
+      concepts: [],
+      quiz: { mcq: [], short: [] },
     });
+
+    return NextResponse.json(parsed);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal server error";
 
