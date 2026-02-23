@@ -1,17 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { generateContent } from "../../../lib/gemini";
-<<<<<<< HEAD
-import {
-  generateSummaryPrompt,
-  generateConceptPrompt,
-  generateQuizPrompt,
-} from "../../../lib/prompts";
-import { trimText, safeJSONParse } from "../../../lib/utils.js";
-=======
 import { generateAnalyzePrompt } from "../../../lib/prompts";
-import { trimText, safeJSONParse } from "../../../lib/utils";
->>>>>>> 63bc7bdf5f61daba82d1f2b246cdb724ff9c8c51
+import { trimText, safeJSONParse } from "../../../lib/utils.js";
 
 const MAX_ITEMS = {
   summary: 5,

@@ -1,207 +1,313 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Button } from '@/components/ui/button';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Upload, Sparkles, Brain, Zap, GraduationCap, Star } from 'lucide-react';
+import { BookOpenCheck, Brain, CheckCircle2, Lightbulb, Loader2, Sparkles, Upload } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 
-export default function Home() {
-  const router = useRouter();
-  const [isLoading, setIsLoading] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [topic, setTopic] = useState('');
+type Concept = {
+  term: string;
+  definition: string;
+};
 
-  const handleFileProcessed = async () => {
-    if (!file) return;
-    
-    setIsLoading(true);
-    // Store file data for results page
-    localStorage.setItem('uploadedFile', file.name);
-    localStorage.setItem('uploadedTopic', topic);
-    
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    router.push('/results');
+type McqQuestion = {
+  question: string;
+  options: string[];
+  answer: string;
+};
+
+type ShortQuestion = {
+  question: string;
+  answer: string;
+};
+
+type AnalyzeResult = {
+  summary: string[];
+  concepts: Concept[];
+  quiz: {
+    mcq: McqQuestion[];
+    short: ShortQuestion[];
+  };
+};
+
+const SAMPLE_LECTURE_TEXT =
+  'Artificial Intelligence (AI) is the simulation of human intelligence in machines. ' +
+  'It includes learning from data, reasoning about problems, and self-correction over time. ' +
+  'Machine Learning is a subset of AI that improves performance using examples instead of fixed rules. ' +
+  'In real-world systems, AI is used for recommendation engines, medical diagnosis support, and fraud detection.';
+
+const EMPTY_RESULT: AnalyzeResult = {
+  summary: [],
+  concepts: [],
+  quiz: { mcq: [], short: [] },
+};
+
+function cleanText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeResult(payload: unknown): AnalyzeResult {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return EMPTY_RESULT;
+  }
+
+  const source = payload as {
+    summary?: unknown;
+    concepts?: unknown;
+    quiz?: { mcq?: unknown; short?: unknown } | unknown;
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
+  const summary = Array.isArray(source.summary)
+    ? source.summary.map(cleanText).filter(Boolean).slice(0, 5)
+    : [];
+
+  const concepts = Array.isArray(source.concepts)
+    ? source.concepts
+        .map((item) => {
+          const concept = item && typeof item === 'object' && !Array.isArray(item) ? item : {};
+          const raw = concept as { term?: unknown; definition?: unknown };
+
+          return {
+            term: cleanText(raw.term),
+            definition: cleanText(raw.definition),
+          };
+        })
+        .filter((item) => item.term && item.definition)
+        .slice(0, 3)
+    : [];
+
+  const rawQuiz = source.quiz && typeof source.quiz === 'object' && !Array.isArray(source.quiz) ? source.quiz : {};
+  const rawMcq = Array.isArray((rawQuiz as { mcq?: unknown }).mcq) ? ((rawQuiz as { mcq?: unknown[] }).mcq ?? []) : [];
+  const rawShort = Array.isArray((rawQuiz as { short?: unknown }).short)
+    ? ((rawQuiz as { short?: unknown[] }).short ?? [])
+    : [];
+
+  const mcq = rawMcq
+    .map((item) => {
+      const row = item && typeof item === 'object' && !Array.isArray(item) ? item : {};
+      const raw = row as { question?: unknown; options?: unknown; answer?: unknown };
+
+      const options = Array.isArray(raw.options) ? raw.options.map(cleanText).filter(Boolean).slice(0, 4) : [];
+
+      return {
+        question: cleanText(raw.question),
+        options,
+        answer: cleanText(raw.answer),
+      };
+    })
+    .filter((item) => item.question && item.options.length === 4 && item.answer && item.options.includes(item.answer))
+    .slice(0, 3);
+
+  const short = rawShort
+    .map((item) => {
+      const row = item && typeof item === 'object' && !Array.isArray(item) ? item : {};
+      const raw = row as { question?: unknown; answer?: unknown };
+
+      return {
+        question: cleanText(raw.question),
+        answer: cleanText(raw.answer),
+      };
+    })
+    .filter((item) => item.question && item.answer)
+    .slice(0, 2);
+
+  return {
+    summary,
+    concepts,
+    quiz: { mcq, short },
+  };
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlightSummaryLine(line: string, keywords: string[]) {
+  if (!keywords.length) {
+    return line;
+  }
+
+  const sorted = [...keywords].sort((a, b) => b.length - a.length);
+  const pattern = new RegExp(`(${sorted.map(escapeRegex).join('|')})`, 'gi');
+  const keywordSet = new Set(sorted.map((word) => word.toLowerCase()));
+  const parts = line.split(pattern).filter(Boolean);
+
+  return parts.map((part, index) => {
+    const isKeyword = keywordSet.has(part.toLowerCase());
+
+    if (!isKeyword) {
+      return <span key={`${part}-${index}`}>{part}</span>;
+    }
+
+    return (
+      <span key={`${part}-${index}`} className="font-semibold text-cyan-300">
+        {part}
+      </span>
+    );
+  });
+}
+
+function ResultsSkeleton() {
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-white/20 bg-white/10 p-5 sm:p-6 backdrop-blur-sm animate-pulse">
+        <div className="mb-4 h-5 w-40 rounded bg-white/20" />
+        <div className="space-y-3">
+          <div className="h-4 w-full rounded bg-white/20" />
+          <div className="h-4 w-11/12 rounded bg-white/20" />
+          <div className="h-4 w-10/12 rounded bg-white/20" />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white/20 bg-white/10 p-5 sm:p-6 backdrop-blur-sm animate-pulse">
+        <div className="mb-4 h-5 w-44 rounded bg-white/20" />
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="h-24 rounded-xl bg-white/15" />
+          <div className="h-24 rounded-xl bg-white/15" />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-white/20 bg-white/10 p-5 sm:p-6 backdrop-blur-sm animate-pulse">
+        <div className="mb-4 h-5 w-32 rounded bg-white/20" />
+        <div className="space-y-4">
+          <div className="h-28 rounded-xl bg-white/15" />
+          <div className="h-20 rounded-xl bg-white/15" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function Home() {
+  const [file, setFile] = useState<File | null>(null);
+  const [topic, setTopic] = useState('');
+  const [lectureText, setLectureText] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [result, setResult] = useState<AnalyzeResult | null>(null);
+
+  const canAnalyze = lectureText.trim().length > 0 && !isLoading;
+
+  const summaryKeywords = useMemo(() => {
+    if (!result) return [];
+
+    const keywords = result.concepts
+      .flatMap((concept) => concept.term.split(/[^A-Za-z0-9-]+/g))
+      .map((word) => word.trim())
+      .filter((word) => word.length >= 4);
+
+    return Array.from(new Set(keywords)).slice(0, 20);
+  }, [result]);
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = event.target.files?.[0];
     if (selectedFile) {
       setFile(selectedFile);
     }
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const droppedFile = e.dataTransfer.files[0];
+  const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const droppedFile = event.dataTransfer.files[0];
     if (droppedFile) {
       setFile(droppedFile);
     }
   };
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
+  const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+  };
+
+  const handleTrySample = () => {
+    setLectureText(SAMPLE_LECTURE_TEXT);
+    setError('');
+  };
+
+  const handleAnalyzeLecture = async () => {
+    const text = lectureText.trim();
+    if (!text) return;
+
+    setIsLoading(true);
+    setError('');
+    setResult(null);
+
+    try {
+      const response = await fetch('/api/analyze?mode=normal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+
+      const payload = (await response.json()) as unknown;
+      if (!response.ok) {
+        const message =
+          payload && typeof payload === 'object' && !Array.isArray(payload) && 'message' in payload
+            ? cleanText((payload as { message?: unknown }).message) || 'Request failed.'
+            : 'Request failed.';
+
+        throw new Error(message);
+      }
+
+      setResult(sanitizeResult(payload));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to analyze lecture text.';
+      setError(message);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-indigo-900 via-blue-900 to-purple-900 relative overflow-hidden">
-      {/* Enhanced Background Decorations */}
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        {/* Animated gradient orbs */}
         <motion.div
           className="absolute top-10 left-10 w-96 h-96 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-full filter blur-3xl"
-          animate={{
-            x: [0, 100, 0],
-            y: [0, -50, 0],
-          }}
-          transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }}
+          animate={{ x: [0, 100, 0], y: [0, -50, 0] }}
+          transition={{ duration: 15, repeat: Infinity, ease: 'easeInOut' }}
         />
         <motion.div
           className="absolute bottom-10 right-10 w-80 h-80 bg-gradient-to-r from-purple-500/20 to-pink-500/20 rounded-full filter blur-3xl"
-          animate={{
-            x: [0, -80, 0],
-            y: [0, 60, 0],
-          }}
-          transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
+          animate={{ x: [0, -80, 0], y: [0, 60, 0] }}
+          transition={{ duration: 12, repeat: Infinity, ease: 'easeInOut' }}
         />
-        <motion.div
-          className="absolute top-1/2 left-1/4 w-64 h-64 bg-gradient-to-r from-cyan-500/15 to-blue-500/15 rounded-full filter blur-3xl"
-          animate={{
-            x: [0, 40, 0],
-            y: [0, -30, 0],
-          }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut" }}
-        />
-        
-        {/* Floating icons */}
-        <motion.div
-          className="absolute top-20 left-20 w-32 h-32 text-blue-300/30"
-          animate={{ rotate: 360 }}
-          transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-        >
-          <Brain className="w-full h-full" />
-        </motion.div>
-        <motion.div
-          className="absolute top-40 right-32 w-24 h-24 text-purple-300/30"
-          animate={{ y: [0, -20, 0] }}
-          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-        >
-          <Zap className="w-full h-full" />
-        </motion.div>
-        <motion.div
-          className="absolute bottom-32 left-1/3 w-28 h-28 text-cyan-300/30"
-          animate={{ rotate: -360 }}
-          transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
-        >
-          <GraduationCap className="w-full h-full" />
-        </motion.div>
-        <motion.div
-          className="absolute top-60 right-1/4 w-20 h-20 text-pink-300/30"
-          animate={{ rotate: 360, scale: [1, 1.2, 1] }}
-          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-        >
-          <Star className="w-full h-full" />
-        </motion.div>
       </div>
 
-      {/* Enhanced Navigation Header */}
       <header className="sticky top-0 z-50 bg-white/10 backdrop-blur-md border-b border-white/20 shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-xl flex items-center justify-center shadow-lg shadow-purple-500/30">
-              <div className="w-6 h-6 bg-white rounded-sm flex items-center justify-center">
-                <div className="w-4 h-4 bg-gradient-to-r from-blue-500 to-purple-500 rounded-sm"></div>
-              </div>
+              <Brain className="w-5 h-5 text-white" />
             </div>
             <span className="text-white font-bold text-xl hidden sm:block">Smart Lecture</span>
             <span className="text-white font-bold text-lg sm:hidden">SL</span>
           </div>
-          <nav className="flex items-center gap-4 sm:gap-6">
-            <Button variant="ghost" className="text-white hover:text-cyan-300 font-medium transition-colors">
-              <span className="hidden sm:inline">Home</span>
-              <span className="sm:hidden">🏠</span>
-            </Button>
-            <Button className="bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-medium px-4 sm:px-6 py-2 rounded-full shadow-lg shadow-purple-500/30 transition-all hover:scale-105">
-              <span className="hidden sm:inline">Results</span>
-              <span className="sm:hidden">📊</span>
-              <Sparkles className="w-4 h-4 ml-0 sm:ml-2" />
-            </Button>
-          </nav>
+          <span className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 rounded-full text-white/90 text-sm font-medium border border-cyan-400/30">
+            <Sparkles className="w-4 h-4 text-cyan-300" />
+            AI-Powered Study Assistant
+          </span>
         </div>
       </header>
 
-      {/* Enhanced Main Content */}
-      <main className="flex flex-col items-center justify-center min-h-[calc(100vh-80px)] px-4 sm:px-6 lg:px-8 py-8 relative z-10">
-        <motion.div
-          className="max-w-4xl w-full"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6 }}
-        >
-          {/* Enhanced AI-Powered Badge */}
-          <motion.div
-            className="text-center mb-6 sm:mb-8"
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.1 }}
-          >
-            <span className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 backdrop-blur-sm rounded-full text-white/90 text-sm font-medium border border-cyan-400/30 shadow-lg shadow-cyan-500/20">
-              <Star className="w-4 h-4 text-cyan-300" />
-              AI-Powered Study Assistant
-            </span>
-          </motion.div>
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-10 relative z-10">
+        <motion.section initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+          <div className="text-center mb-8">
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-white mb-3">Smart Lecture Companion</h1>
+            <p className="text-white/85 text-lg">Upload notes, paste lecture text, and generate summary, concepts, and quiz instantly.</p>
+          </div>
 
-          {/* Enhanced Title Section */}
-          <motion.div
-            className="text-center mb-8 sm:mb-12"
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.2 }}
-          >
-            <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold text-white mb-2 leading-tight">
-              Smart Lecture
-            </h1>
-            <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-bold bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400 bg-clip-text text-transparent leading-tight">
-              Companion
-            </h1>
-          </motion.div>
-
-          {/* Enhanced Subtitle */}
-          <motion.div
-            className="text-center mb-8 sm:mb-12"
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.3 }}
-          >
-            <p className="text-lg sm:text-xl text-white/90 leading-relaxed max-w-3xl mx-auto">
-              Upload your lecture notes and get instant summaries,<br />
-              key concepts, and quizzes.
-            </p>
-          </motion.div>
-
-          {/* Enhanced Upload Card */}
-          <motion.div
-            className="bg-gradient-to-br from-white/15 to-white/5 backdrop-blur-xl rounded-3xl p-6 sm:p-8 lg:p-10 border border-white/30 shadow-2xl shadow-purple-500/20"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.6, delay: 0.4 }}
-          >
-            {/* Enhanced File Upload Area */}
+          <div className="bg-gradient-to-br from-white/15 to-white/5 backdrop-blur-xl rounded-3xl p-6 sm:p-8 border border-white/30 shadow-2xl shadow-purple-500/20">
             <div
-              className="border-2 border-dashed border-cyan-400/50 rounded-2xl p-6 sm:p-8 text-center mb-6 cursor-pointer hover:border-cyan-400 transition-all duration-300 hover:bg-gradient-to-br hover:from-cyan-500/10 hover:to-purple-500/10 group"
+              className="border-2 border-dashed border-cyan-400/50 rounded-2xl p-6 text-center mb-4 cursor-pointer hover:border-cyan-400 transition-all duration-300 hover:bg-gradient-to-br hover:from-cyan-500/10 hover:to-purple-500/10 group"
               onDrop={handleDrop}
               onDragOver={handleDragOver}
               onClick={() => document.getElementById('file-input')?.click()}
             >
-              <div className="relative inline-block mb-4">
-                <Upload className="w-12 h-12 sm:w-16 sm:h-16 text-cyan-300 group-hover:text-cyan-200 transition-colors" />
-                <div className="absolute inset-0 w-12 h-12 sm:w-16 sm:h-16 bg-cyan-400/20 rounded-full blur-xl animate-pulse"></div>
-              </div>
-              <p className="text-white text-lg sm:text-xl mb-2 font-medium">Drop your lecture file here</p>
-              <p className="text-white/70 text-sm sm:text-base">PDF, DOCX, TXT, or PPTX</p>
+              <Upload className="w-12 h-12 text-cyan-300 mx-auto mb-3 group-hover:text-cyan-200 transition-colors" />
+              <p className="text-white text-lg font-medium">Drop your lecture file here</p>
+              <p className="text-white/70 text-sm">PDF, DOCX, TXT, or PPTX</p>
               {file && (
-                <div className="mt-4 p-3 bg-gradient-to-r from-green-500/20 to-emerald-500/20 border border-green-400/30 rounded-xl">
-                  <p className="text-green-300 text-sm font-medium">✓ Selected: {file.name}</p>
+                <div className="mt-3 p-2.5 bg-gradient-to-r from-emerald-500/20 to-green-500/20 border border-emerald-400/30 rounded-xl">
+                  <p className="text-emerald-300 text-sm font-medium">Selected: {file.name}</p>
                 </div>
               )}
               <input
@@ -213,66 +319,171 @@ export default function Home() {
               />
             </div>
 
-            {/* Enhanced Topic Input */}
+            <div className="mb-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleTrySample}
+                className="w-full sm:w-auto border-cyan-300/60 bg-white/5 text-cyan-200 hover:bg-cyan-500/15 hover:text-cyan-100 rounded-xl"
+              >
+                Try Sample
+              </Button>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-white/90 text-sm mb-2 font-medium">Lecture Text</label>
+              <textarea
+                rows={7}
+                placeholder="Paste lecture notes or transcript here..."
+                value={lectureText}
+                onChange={(event) => setLectureText(event.target.value)}
+                className="w-full px-4 py-3 bg-white/10 border border-cyan-400/30 rounded-xl text-white placeholder-white/50 focus:outline-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-400/20 transition-all resize-y"
+              />
+            </div>
+
             <div className="mb-6">
               <label className="block text-white/90 text-sm mb-2 font-medium">Topic (optional)</label>
               <input
                 type="text"
                 placeholder="e.g., Cell Biology, Machine Learning..."
                 value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                className="w-full px-4 py-3 bg-gradient-to-r from-white/10 to-white/5 border border-cyan-400/30 rounded-xl text-white placeholder-white/50 focus:outline-none focus:border-cyan-400 focus:ring-2 focus:ring-cyan-400/20 transition-all duration-300"
+                onChange={(event) => setTopic(event.target.value)}
+                className="w-full px-4 py-3 bg-white/10 border border-cyan-400/30 rounded-xl text-white placeholder-white/50 focus:outline-none focus:border-cyan-300 focus:ring-2 focus:ring-cyan-400/20 transition-all"
               />
             </div>
 
-            {/* Enhanced Analyze Button */}
             <Button
-              onClick={handleFileProcessed}
-              disabled={!file || isLoading}
-              className="w-full bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500 hover:from-cyan-600 hover:via-blue-600 hover:to-purple-600 disabled:from-gray-600 disabled:to-gray-700 text-white font-bold py-4 sm:py-5 rounded-xl flex items-center justify-center gap-3 transition-all duration-300 transform hover:scale-105 disabled:scale-100 shadow-lg shadow-purple-500/30 hover:shadow-xl hover:shadow-purple-500/40 text-lg"
+              onClick={handleAnalyzeLecture}
+              disabled={!canAnalyze}
+              className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 disabled:from-slate-600 disabled:to-slate-700 text-white font-semibold py-6 rounded-xl flex items-center justify-center gap-3 transition-all duration-300 shadow-lg shadow-blue-500/30 text-lg"
             >
               {isLoading ? (
                 <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <Loader2 className="w-5 h-5 animate-spin" />
                   Analyzing...
                 </>
               ) : (
                 <>
                   Analyze Lecture
-                  <Sparkles className="w-5 h-5 text-yellow-300" />
+                  <Sparkles className="w-5 h-5" />
                 </>
               )}
             </Button>
-          </motion.div>
 
-          {/* Enhanced Bottom Features */}
-          <motion.div
-            className="flex flex-wrap justify-center items-center gap-2 sm:gap-4 mt-12 text-white/80 text-sm sm:text-base"
-            initial={{ opacity: 0, y: 10 }}
+            {error && <p className="mt-4 text-sm text-red-300">{error}</p>}
+          </div>
+        </motion.section>
+
+        {(isLoading || result) && (
+          <motion.section
+            className="mt-8 space-y-6"
+            initial={{ opacity: 0, y: 18 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.5 }}
+            transition={{ duration: 0.4 }}
           >
-            <div className="flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-blue-500/20 to-purple-500/20 rounded-full">
-              <div className="w-2 h-2 bg-blue-400 rounded-full"></div>
-              <span>Instant Summaries</span>
-            </div>
-            <span className="text-white/40">•</span>
-            <div className="flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-purple-500/20 to-pink-500/20 rounded-full">
-              <div className="w-2 h-2 bg-purple-400 rounded-full"></div>
-              <span>Key Concepts</span>
-            </div>
-            <span className="text-white/40">•</span>
-            <div className="flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 rounded-full">
-              <div className="w-2 h-2 bg-cyan-400 rounded-full"></div>
-              <span>Auto Quizzes</span>
-            </div>
-            <span className="text-white/40">•</span>
-            <div className="flex items-center gap-2 px-3 py-1 bg-gradient-to-r from-emerald-500/20 to-green-500/20 rounded-full">
-              <div className="w-2 h-2 bg-emerald-400 rounded-full"></div>
-              <span>Smart Highlights</span>
-            </div>
-          </motion.div>
-        </motion.div>
+            {isLoading && <ResultsSkeleton />}
+
+            {!isLoading && result && (
+              <>
+                <div className="rounded-2xl border border-white/20 bg-white/10 p-5 sm:p-6 backdrop-blur-sm">
+                  <div className="flex items-center gap-2 mb-4">
+                    <BookOpenCheck className="w-5 h-5 text-cyan-300" />
+                    <h2 className="text-xl font-semibold text-white">Summary</h2>
+                  </div>
+                  {result.summary.length > 0 ? (
+                    <ul className="space-y-2 text-white/90">
+                      {result.summary.map((line, index) => (
+                        <li key={`summary-${index}`} className="flex gap-3">
+                          <span className="text-cyan-300 mt-1">&bull;</span>
+                          <span>{highlightSummaryLine(line, summaryKeywords)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-white/60 text-sm">No summary points generated.</p>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-white/20 bg-white/10 p-5 sm:p-6 backdrop-blur-sm">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Lightbulb className="w-5 h-5 text-yellow-300" />
+                    <h2 className="text-xl font-semibold text-white">Concepts</h2>
+                  </div>
+                  {result.concepts.length > 0 ? (
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {result.concepts.map((concept, index) => (
+                        <div key={`${concept.term}-${index}`} className="rounded-xl border border-white/20 bg-white/5 p-4">
+                          <h3 className="text-white font-semibold mb-2">{concept.term}</h3>
+                          <p className="text-white/80 text-sm leading-relaxed">{concept.definition}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-white/60 text-sm">No concepts generated.</p>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-white/20 bg-white/10 p-5 sm:p-6 backdrop-blur-sm">
+                  <div className="flex items-center gap-2 mb-4">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-300" />
+                    <h2 className="text-xl font-semibold text-white">Quiz</h2>
+                  </div>
+
+                  <div className="space-y-6">
+                    <div>
+                      <h3 className="text-white font-medium mb-3">MCQs</h3>
+                      {result.quiz.mcq.length > 0 ? (
+                        <div className="space-y-4">
+                          {result.quiz.mcq.map((item, questionIndex) => (
+                            <div key={`mcq-${questionIndex}`} className="rounded-xl border border-white/20 bg-white/5 p-4">
+                              <p className="text-white font-medium mb-3">{item.question}</p>
+                              <ul className="space-y-2">
+                                {item.options.map((option, optionIndex) => {
+                                  const isAnswer = option === item.answer;
+
+                                  return (
+                                    <li
+                                      key={`mcq-${questionIndex}-option-${optionIndex}`}
+                                      className={`rounded-lg px-3 py-2 text-sm border ${
+                                        isAnswer
+                                          ? 'border-emerald-300/60 bg-emerald-500/20 text-emerald-100'
+                                          : 'border-white/20 bg-white/5 text-white/85'
+                                      }`}
+                                    >
+                                      {option}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-white/60 text-sm">No MCQs generated.</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <h3 className="text-white font-medium mb-3">Short Questions</h3>
+                      {result.quiz.short.length > 0 ? (
+                        <div className="space-y-3">
+                          {result.quiz.short.map((item, index) => (
+                            <div key={`short-${index}`} className="rounded-xl border border-white/20 bg-white/5 p-4">
+                              <p className="text-white font-medium mb-2">{item.question}</p>
+                              <p className="text-white/80 text-sm">{item.answer}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-white/60 text-sm">No short questions generated.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </motion.section>
+        )}
       </main>
     </div>
   );
